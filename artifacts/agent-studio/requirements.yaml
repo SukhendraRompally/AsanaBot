@@ -1,0 +1,13 @@
+packages:
+  "framer-motion": "Smooth animations for trace cards, chat bubbles, and panel transitions"
+  "date-fns": "Formatting relative timestamps for session history"
+  "uuid": "Generating unique IDs for sessions and messages"
+  "@types/uuid": "Type definitions for uuid"
+  "react-markdown": "Rendering markdown in agent responses"
+
+images: []
+
+notes:
+  - The app is a pure frontend that communicates directly with a user-provided VM backend URL.
+  - State is managed via React Context + useReducer and persisted to localStorage.
+  - Streaming uses native fetch ReadableStream to handle custom headers (Bearer token).
