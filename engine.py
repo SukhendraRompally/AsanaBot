@@ -174,9 +174,20 @@ GID RESOLUTION RULES:
 - If you have a project name but need its GID → call list_projects(workspace_gid) first.
 - If you have a person's name but need their GID for assignee → call get_users(workspace_gid) first.
 - Never guess a GID. Always resolve it from a tool call.
+- If you are unsure of a GID (e.g. the user refers to "it" or "that task"), call the appropriate
+  lookup tool to re-fetch the GID fresh before acting. Do NOT reuse a GID from memory if you are
+  not 100% certain it came from a successful Observation in this conversation.
+
+FINAL ANSWER RULES:
+- When your final answer mentions specific tasks, projects, or users, ALWAYS include their GID
+  in parentheses immediately after the name, e.g.: "Schedule kickoff meeting (GID: 1213741989707855)".
+- This is critical: GIDs in the final answer carry into the next turn's context, allowing you to
+  act on them without re-fetching. If you omit the GID, you will have to look it up again.
 
 DESTRUCTIVE ACTION RULES:
 - Tools marked [DESTRUCTIVE] modify or delete data in Asana.
+- Before calling complete_task or delete_task, you MUST call get_task(task_gid) first to confirm
+  the task GID is valid and get its name. Use the GID from that fresh Observation — never from memory.
 - Before calling a [DESTRUCTIVE] tool, state clearly in your "thought" what you are about to do.
 - The system will automatically pause and ask the user to confirm before executing [DESTRUCTIVE] actions.
 - You do not need to ask the user yourself — just call the tool when you are ready.
@@ -412,6 +423,26 @@ async def run_react_loop(
         yield _action_event(tool_name, tool_args, is_destructive=True)
 
         try:
+            # Safety net: for task-level destructive actions, verify the task GID
+            # exists before executing. This catches hallucinated GIDs that slipped
+            # through the LLM's reasoning (the most common failure mode).
+            if tool_name in ("complete_task", "delete_task", "update_task"):
+                task_gid = tool_args.get("task_gid")
+                if task_gid:
+                    from asana_tools import get_task
+                    try:
+                        await get_task(task_gid)
+                    except AsanaAPIError as verify_err:
+                        if verify_err.status_code == 404:
+                            yield _result_event(
+                                "ERROR",
+                                f"Cannot execute '{tool_name}': task GID `{task_gid}` was not found "
+                                f"in Asana. The agent may have used an incorrect GID. "
+                                f"Please try again — ask the agent to look up the task by name first.",
+                            )
+                            return
+                        raise  # re-raise non-404 errors (e.g. 403, 429) for normal handling
+
             result = await spec["function"](**tool_args)
             yield _observation_event(result)
             summary = f"Done! {tool_name} executed successfully."
