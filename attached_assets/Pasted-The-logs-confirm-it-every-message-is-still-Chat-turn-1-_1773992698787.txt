@@ -1,0 +1,79 @@
+The logs confirm it — every message is still "Chat turn 1" with a brand new session ID. The backend is working perfectly (storing history, returning session_id in every result). The Replit frontend is not sending the session_id back on subsequent messages.
+
+This is purely a Replit frontend fix. Here is exactly what needs to change — paste this into the Replit chat/share it with the Replit frontend:
+
+The one-line diagnosis
+Every request from Replit looks like:
+
+
+{"message": "Are there any tasks in it?"}
+It needs to look like:
+
+
+{"message": "Are there any tasks in it?", "session_id": "43701ba7-db15-4725-8b9b-3d3510c84038"}
+Exact fix for the Replit frontend
+Find wherever the frontend calls /chat (or /api/proxy/chat) and apply this pattern:
+
+
+// At the top of your chat component/module — persist across messages
+let currentSessionId = null;
+
+async function sendMessage(userMessage) {
+  const body = { message: userMessage };
+  
+  // Always send session_id if we have one — this is what enables memory
+  if (currentSessionId) {
+    body.session_id = currentSessionId;
+  }
+
+  const response = await fetch('/api/proxy/chat', {   // or wherever your proxy points
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+
+      // ★ CRITICAL: capture session_id from every result event
+      if (event.type === 'result' && event.content?.session_id) {
+        currentSessionId = event.content.session_id;
+      }
+
+      // Also capture from confirmation_required (already had this)
+      if (event.type === 'confirmation_required' && event.content?.session_id) {
+        currentSessionId = event.content.session_id;
+      }
+
+      handleEvent(event);
+    }
+  }
+}
+
+// For confirmation, reuse the same currentSessionId:
+async function confirmAction() {
+  const body = {
+    confirmation: true,
+    session_id: currentSessionId,   // same ID — no message needed
+    message: '',
+  };
+  // ... same fetch + stream reading as above
+}
+Key points:
+
+currentSessionId must be module-level (outside the function) — not reset on each message
+Capture it from result events, not just confirmation_required
+If the user starts a fresh topic intentionally, set currentSessionId = null to begin a new session

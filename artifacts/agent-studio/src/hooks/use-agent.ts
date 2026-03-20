@@ -1,8 +1,8 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useAppStore } from '@/lib/store';
 import { AgentEvent, TraceStep } from '@/lib/types';
-import { vmFetch, vmProxyUrl, vmHeaders } from '@/lib/vm-fetch';
+import { vmProxyUrl, vmHeaders } from '@/lib/vm-fetch';
 import { useToast } from '@/hooks/use-toast';
 
 /**
@@ -90,6 +90,25 @@ export function useAgent() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const agentMsgIdRef = useRef<string>(uuidv4());
 
+  /**
+   * Module-level-style ref for the VM session ID.
+   * Using a ref (not state) means it is written and read synchronously —
+   * no async React re-render cycle, so the value is always current when
+   * the next sendQuery fires.
+   */
+  const vmSessionIdRef = useRef<string | null>(null);
+
+  // Reset the session ID whenever the user switches to a different session.
+  const activeSessionId = activeSession?.id;
+  const prevSessionIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (activeSessionId !== prevSessionIdRef.current) {
+      vmSessionIdRef.current = null;
+      prevSessionIdRef.current = activeSessionId;
+      console.log('[agent] session changed — session_id cleared');
+    }
+  }, [activeSessionId]);
+
   const processEvent = useCallback((event: AgentEvent) => {
     const agentMsgId = agentMsgIdRef.current;
     const base: Omit<TraceStep, 'type'> = { id: uuidv4(), timestamp: Date.now() };
@@ -114,6 +133,9 @@ export function useAgent() {
         break;
 
       case 'confirmation_required':
+        // ★ Store synchronously in ref — available immediately on next call
+        vmSessionIdRef.current = event.content.session_id;
+        console.log('[agent] session_id captured from confirmation_required:', event.content.session_id);
         dispatch({
           type: 'ADD_TRACE',
           trace: {
@@ -139,12 +161,15 @@ export function useAgent() {
 
       case 'result': {
         const { status, message, session_id } = event.content;
+        // ★ Store synchronously in ref — available immediately on next call
+        if (session_id) {
+          vmSessionIdRef.current = session_id;
+          console.log('[agent] session_id captured from result:', session_id);
+          dispatch({ type: 'SET_VM_SESSION_ID', sessionId: session_id });
+        }
         dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
         dispatch({ type: 'ADD_TRACE', trace: { ...base, type: 'result', status, content: message }, agentMsgId });
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
-        if (session_id) {
-          dispatch({ type: 'SET_VM_SESSION_ID', sessionId: session_id });
-        }
         if (status === 'ERROR') {
           toast({ title: 'Agent Error', description: message, variant: 'destructive' });
         }
@@ -212,8 +237,12 @@ export function useAgent() {
     try {
       abortControllerRef.current = new AbortController();
 
+      // ★ Read from ref — always synchronously current, never stale
       const payload: Record<string, unknown> = { message: query };
-      if (state.vmSessionId) payload.session_id = state.vmSessionId;
+      if (vmSessionIdRef.current) {
+        payload.session_id = vmSessionIdRef.current;
+        console.log('[agent] sending session_id:', vmSessionIdRef.current);
+      }
 
       const res = await fetch(vmProxyUrl('/chat'), {
         method: 'POST',
@@ -237,10 +266,11 @@ export function useAgent() {
       toast({ title: 'Connection Error', description: message, variant: 'destructive' });
       processEvent({ type: 'result', content: { status: 'ERROR', message } });
     }
-  }, [state.settings, state.isStreaming, state.pendingConfirmation, state.vmSessionId, activeSession, dispatch, processEvent, drainStream, toast]);
+  }, [state.settings, state.isStreaming, state.pendingConfirmation, activeSession, dispatch, processEvent, drainStream, toast]);
 
   const confirmAction = useCallback(async (confirmed: boolean) => {
-    const sessionId = state.pendingConfirmation?.session_id ?? state.vmSessionId;
+    // ★ Read from ref — always has the latest session_id
+    const sessionId = state.pendingConfirmation?.session_id ?? vmSessionIdRef.current;
     dispatch({ type: 'SET_CONFIRMATION', request: null });
 
     // ── DEMO MODE ────────────────────────────────────────────────────────────
@@ -275,7 +305,7 @@ export function useAgent() {
       const message = err instanceof Error ? err.message : 'Failed to send confirmation';
       toast({ title: 'Error', description: message, variant: 'destructive' });
     }
-  }, [state.settings, state.pendingConfirmation, state.vmSessionId, dispatch, processEvent, drainStream, toast]);
+  }, [state.settings, state.pendingConfirmation, dispatch, processEvent, drainStream, toast]);
 
   const stopStream = useCallback(() => {
     if (abortControllerRef.current) {
