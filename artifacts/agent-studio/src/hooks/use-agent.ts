@@ -1,25 +1,77 @@
 import { useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useAppStore } from '@/lib/store';
-import { TraceStep } from '@/lib/types';
+import { AgentEvent, TraceStep } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
+
+/** Parse a raw stream line into a typed AgentEvent, or null if unparseable/ignored. */
+function parseStreamLine(line: string): AgentEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  const jsonStr = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed;
+  if (jsonStr === '[DONE]') return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    console.warn('[agent] unparseable stream line:', line);
+    return null;
+  }
+
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    !('type' in parsed) ||
+    typeof (parsed as Record<string, unknown>).type !== 'string'
+  ) {
+    return null;
+  }
+
+  const raw = parsed as Record<string, unknown>;
+  const type = raw.type as string;
+
+  switch (type) {
+    case 'thought':
+      return { type: 'thought', content: String(raw.content ?? '') };
+    case 'action':
+      return {
+        type: 'action',
+        tool: String(raw.tool ?? ''),
+        args: (raw.args && typeof raw.args === 'object' && !Array.isArray(raw.args))
+          ? (raw.args as Record<string, unknown>)
+          : {},
+      };
+    case 'observation':
+      return { type: 'observation', content: String(raw.content ?? '') };
+    case 'final_answer':
+      return { type: 'final_answer', content: String(raw.content ?? '') };
+    case 'requires_confirmation':
+      return {
+        type: 'requires_confirmation',
+        action_type: String(raw.action_type ?? ''),
+        resource: String(raw.resource ?? ''),
+        workspace: String(raw.workspace ?? ''),
+        consequence: String(raw.consequence ?? ''),
+      };
+    case 'error':
+      return { type: 'error', message: String(raw.message ?? 'Unknown error') };
+    default:
+      console.warn('[agent] unknown event type:', type);
+      return null;
+  }
+}
 
 export function useAgent() {
   const { state, dispatch, activeSession } = useAppStore();
   const { toast } = useToast();
   const abortControllerRef = useRef<AbortController | null>(null);
-  // Stable per-turn agent message ID — set when a new query starts, cleared after turn ends
   const agentMsgIdRef = useRef<string>(uuidv4());
 
-  const processEvent = useCallback((event: any) => {
-    if (!event || !event.type) return;
-
+  const processEvent = useCallback((event: AgentEvent) => {
     const agentMsgId = agentMsgIdRef.current;
-
-    const baseTrace: Omit<TraceStep, 'type'> = {
-      id: uuidv4(),
-      timestamp: Date.now(),
-    };
+    const baseTrace: Omit<TraceStep, 'type'> = { id: uuidv4(), timestamp: Date.now() };
 
     switch (event.type) {
       case 'thought':
@@ -38,17 +90,17 @@ export function useAgent() {
         dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'final_answer', content: event.content }, agentMsgId });
         break;
       case 'requires_confirmation':
-        dispatch({ 
-          type: 'ADD_TRACE', 
-          trace: { 
-            ...baseTrace, 
-            type: 'requires_confirmation', 
+        dispatch({
+          type: 'ADD_TRACE',
+          trace: {
+            ...baseTrace,
+            type: 'requires_confirmation',
             action_type: event.action_type,
             resource: event.resource,
             workspace: event.workspace,
-            consequence: event.consequence
+            consequence: event.consequence,
           },
-          agentMsgId
+          agentMsgId,
         });
         dispatch({
           type: 'SET_CONFIRMATION',
@@ -56,10 +108,9 @@ export function useAgent() {
             action_type: event.action_type,
             resource: event.resource,
             workspace: event.workspace,
-            consequence: event.consequence
-          }
+            consequence: event.consequence,
+          },
         });
-        // We stop streaming visually, wait for user
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
         break;
       case 'error':
@@ -70,41 +121,64 @@ export function useAgent() {
     }
   }, [dispatch, toast]);
 
+  /** Read an NDJSON/SSE response body, emitting typed events via processEvent. */
+  const drainStream = useCallback(async (body: ReadableStream<Uint8Array>) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        const event = parseStreamLine(line);
+        if (event) processEvent(event);
+      }
+    }
+
+    // Handle any remaining buffered content
+    if (buffer.trim()) {
+      const event = parseStreamLine(buffer);
+      if (event) processEvent(event);
+    }
+  }, [processEvent]);
+
   const sendQuery = useCallback(async (query: string) => {
     if (!query.trim() || state.isStreaming || !activeSession) return;
 
-    // Assign a fresh agent message ID for this turn — all trace events in this turn target it
     agentMsgIdRef.current = uuidv4();
 
-    // Add user message
     dispatch({
       type: 'ADD_MESSAGE',
-      message: { id: uuidv4(), role: 'user', content: query, timestamp: Date.now() }
+      message: { id: uuidv4(), role: 'user', content: query, timestamp: Date.now() },
     });
-
     dispatch({ type: 'SET_STREAMING', isStreaming: true });
 
     // DEMO MODE
     if (!state.settings.vmBackendUrl) {
-      setTimeout(() => processEvent({ type: 'thought', content: 'I need to find the Marketing project GID first, then create the task.' }), 500);
-      setTimeout(() => processEvent({ type: 'action', tool: 'search_projects', args: { query: 'Marketing' } }), 1500);
-      setTimeout(() => processEvent({ type: 'observation', content: 'Found project: Marketing (GID: 1234567890)' }), 3000);
-      setTimeout(() => processEvent({ type: 'thought', content: "Now I'll create the task in this project." }), 4000);
-      setTimeout(() => processEvent({ type: 'action', tool: 'create_task', args: { project_gid: '1234567890', name: 'Design Review', notes: '' } }), 5000);
-      
-      // Simulate confirmation requirement for demo
+      const fire = (ev: AgentEvent, ms: number) => setTimeout(() => processEvent(ev), ms);
+      fire({ type: 'thought', content: 'I need to find the Marketing project GID first, then create the task.' }, 500);
+      fire({ type: 'action', tool: 'search_projects', args: { query: 'Marketing' } }, 1500);
+      fire({ type: 'observation', content: 'Found project: Marketing (GID: 1234567890)' }, 3000);
+      fire({ type: 'thought', content: "Now I'll create the task in this project." }, 4000);
+      fire({ type: 'action', tool: 'create_task', args: { project_gid: '1234567890', name: 'Design Review', notes: '' } }, 5000);
+
       if (query.toLowerCase().includes('delete')) {
-        setTimeout(() => processEvent({ 
-          type: 'requires_confirmation', 
-          action_type: 'DELETE TASK', 
-          resource: 'Design Review', 
-          workspace: 'Marketing', 
-          consequence: 'This will permanently delete the task and it cannot be recovered.' 
-        }), 6000);
-        return; // Pause demo here
+        fire({
+          type: 'requires_confirmation',
+          action_type: 'DELETE TASK',
+          resource: 'Design Review',
+          workspace: 'Marketing',
+          consequence: 'This will permanently delete the task and it cannot be recovered.',
+        }, 6000);
+        return;
       }
 
-      setTimeout(() => processEvent({ type: 'observation', content: 'Task created successfully: GID 9876543210' }), 6500);
+      fire({ type: 'observation', content: 'Task created successfully: GID 9876543210' }, 6500);
       setTimeout(() => {
         processEvent({ type: 'final_answer', content: "I've created the task 'Design Review' in the Marketing project. Task GID: 9876543210" });
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
@@ -115,85 +189,43 @@ export function useAgent() {
     // REAL FETCH STREAM
     try {
       abortControllerRef.current = new AbortController();
-      
-      // We send the history without the new message since we just added it locally,
-      // but usually the backend wants the full history.
       const payload = {
         query,
         sessionId: activeSession.id,
-        history: activeSession.messages.map(m => ({ role: m.role, content: m.content }))
+        history: activeSession.messages.map(m => ({ role: m.role, content: m.content })),
       };
 
       const res = await fetch(`${state.settings.vmBackendUrl}/query`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {})
+          ...(state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {}),
         },
         body: JSON.stringify(payload),
-        signal: abortControllerRef.current.signal
+        signal: abortControllerRef.current.signal,
       });
 
-      if (!res.ok) {
-        throw new Error(`Server returned ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      if (!res.body) throw new Error('No response body');
 
-      if (!res.body) throw new Error("No response body");
+      await drainStream(res.body);
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        
-        // Split by newlines to parse JSON lines or SSE
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Keep the last incomplete line in buffer
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          
-          try {
-            // Handle raw JSON lines or SSE "data: {...}" format
-            const jsonStr = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed;
-            if (jsonStr === '[DONE]') continue;
-            
-            const event = JSON.parse(jsonStr);
-            processEvent(event);
-            
-            if (event.type === 'final_answer' || event.type === 'error' || event.type === 'requires_confirmation') {
-              // Wait if it's confirmation, otherwise stop streaming state will be handled
-            }
-          } catch (e) {
-            console.warn('Failed to parse stream line:', line);
-          }
-        }
-      }
-      
-      // The backend should send a final_answer which will turn off streaming,
-      // but as a fallback, if stream ends:
       if (!state.pendingConfirmation) {
-         dispatch({ type: 'SET_STREAMING', isStreaming: false });
+        dispatch({ type: 'SET_STREAMING', isStreaming: false });
       }
-
-    } catch (err: any) {
-      if (err.name === 'AbortError') return;
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      const message = err instanceof Error ? err.message : 'Failed to communicate with VM';
       dispatch({ type: 'SET_STREAMING', isStreaming: false });
-      toast({ title: 'Connection Error', description: err.message || 'Failed to communicate with VM', variant: 'destructive' });
-      processEvent({ type: 'error', message: err.message || 'Connection failed' });
+      toast({ title: 'Connection Error', description: message, variant: 'destructive' });
+      processEvent({ type: 'error', message });
     }
-  }, [state.settings, activeSession, state.isStreaming, dispatch, processEvent, toast]);
+  }, [state.settings, state.isStreaming, state.pendingConfirmation, activeSession, dispatch, processEvent, drainStream, toast]);
 
   const confirmAction = useCallback(async (confirmed: boolean) => {
     dispatch({ type: 'SET_CONFIRMATION', request: null });
-    
+
     if (!state.settings.vmBackendUrl) {
-      // Demo mode continuation
       if (confirmed) {
         dispatch({ type: 'SET_STREAMING', isStreaming: true });
         setTimeout(() => processEvent({ type: 'observation', content: 'Action executed successfully.' }), 1000);
@@ -213,43 +245,21 @@ export function useAgent() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {})
+          ...(state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {}),
         },
-        body: JSON.stringify({ sessionId: activeSession?.id, confirmed })
+        body: JSON.stringify({ sessionId: activeSession?.id, confirmed }),
       });
-      
-      // If the confirm endpoint also streams the rest of the execution:
+
       if (res.body) {
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || ''; 
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            try {
-              const jsonStr = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed;
-              if (jsonStr === '[DONE]') continue;
-              processEvent(JSON.parse(jsonStr));
-            } catch (e) {}
-          }
-        }
+        await drainStream(res.body);
       }
       dispatch({ type: 'SET_STREAMING', isStreaming: false });
-    } catch (err: any) {
+    } catch (err) {
       dispatch({ type: 'SET_STREAMING', isStreaming: false });
-      toast({ title: 'Error', description: 'Failed to send confirmation', variant: 'destructive' });
+      const message = err instanceof Error ? err.message : 'Failed to send confirmation';
+      toast({ title: 'Error', description: message, variant: 'destructive' });
     }
-
-  }, [state.settings, activeSession?.id, dispatch, processEvent, toast]);
+  }, [state.settings, activeSession?.id, dispatch, processEvent, drainStream, toast]);
 
   const stopStream = useCallback(() => {
     if (abortControllerRef.current) {

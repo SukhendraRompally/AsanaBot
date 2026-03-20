@@ -10,7 +10,7 @@ export type TraceType =
 
 export interface ToolCall {
   tool: string;
-  args: any;
+  args: Record<string, unknown>;
 }
 
 export interface Message {
@@ -26,7 +26,7 @@ export interface TraceStep {
   type: TraceType;
   content?: string;
   tool?: string;
-  args?: any;
+  args?: Record<string, unknown>;
   action_type?: string;
   resource?: string;
   workspace?: string;
@@ -46,7 +46,17 @@ export interface Session {
 export interface Settings {
   vmBackendUrl: string;
   vmBearerToken: string;
+  vmHealthPath: string;
 }
+
+/** Typed union of all streamed agent event shapes */
+export type AgentEvent =
+  | { type: 'thought'; content: string }
+  | { type: 'action'; tool: string; args: Record<string, unknown> }
+  | { type: 'observation'; content: string }
+  | { type: 'final_answer'; content: string }
+  | { type: 'requires_confirmation'; action_type: string; resource: string; workspace: string; consequence: string }
+  | { type: 'error'; message: string };
 
 export interface ConfirmationRequest {
   action_type: string;

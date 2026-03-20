@@ -5,20 +5,60 @@ import { useAppStore } from '@/lib/store';
 import { TraceStep } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 
-// Helper to colorize JSON
-const formatJson = (obj: any) => {
-  if (!obj) return '';
-  const str = JSON.stringify(obj, null, 2);
-  return str.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (match) => {
-    let cls = 'json-number';
-    if (/^"/.test(match)) {
-      if (/:$/.test(match)) cls = 'json-key';
-      else cls = 'json-string';
-    } else if (/true|false/.test(match)) cls = 'json-boolean';
-    else if (/null/.test(match)) cls = 'json-boolean';
-    return `<span class="${cls}">${match}</span>`;
-  });
+/** Tokenize a JSON string into typed segments for safe colorized rendering */
+type JsonToken = { kind: 'key' | 'string' | 'number' | 'boolean' | 'null' | 'punct'; value: string };
+
+function tokenizeJson(obj: Record<string, unknown>): JsonToken[] {
+  const raw = JSON.stringify(obj, null, 2);
+  const tokens: JsonToken[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    if (raw[i] === '"') {
+      let j = i + 1;
+      while (j < raw.length && !(raw[j] === '"' && raw[j - 1] !== '\\')) j++;
+      const full = raw.slice(i, j + 1);
+      const isKey = raw.slice(j + 1).trimStart().startsWith(':');
+      tokens.push({ kind: isKey ? 'key' : 'string', value: full });
+      i = j + 1;
+    } else if (/[\d\-]/.test(raw[i])) {
+      let j = i;
+      while (j < raw.length && /[\d.eE+\-]/.test(raw[j])) j++;
+      tokens.push({ kind: 'number', value: raw.slice(i, j) });
+      i = j;
+    } else if (raw.startsWith('true', i) || raw.startsWith('false', i)) {
+      const val = raw.startsWith('true', i) ? 'true' : 'false';
+      tokens.push({ kind: 'boolean', value: val });
+      i += val.length;
+    } else if (raw.startsWith('null', i)) {
+      tokens.push({ kind: 'null', value: 'null' });
+      i += 4;
+    } else {
+      tokens.push({ kind: 'punct', value: raw[i] });
+      i++;
+    }
+  }
+  return tokens;
+}
+
+const TOKEN_COLORS: Record<JsonToken['kind'], string> = {
+  key: 'text-sky-400',
+  string: 'text-green-400',
+  number: 'text-amber-400',
+  boolean: 'text-purple-400',
+  null: 'text-red-400',
+  punct: 'text-muted-foreground',
 };
+
+function JsonView({ args }: { args: Record<string, unknown> }) {
+  const tokens = tokenizeJson(args);
+  return (
+    <pre className="text-[11px] font-mono bg-muted/50 p-2 rounded border border-border/50 overflow-x-auto whitespace-pre-wrap break-all">
+      {tokens.map((tok, idx) => (
+        <span key={idx} className={TOKEN_COLORS[tok.kind]}>{tok.value}</span>
+      ))}
+    </pre>
+  );
+}
 
 function TraceCard({ step }: { step: TraceStep }) {
   const [expanded, setExpanded] = useState(false);
@@ -90,17 +130,14 @@ function TraceCard({ step }: { step: TraceStep }) {
             </div>
             {step.args && (
               <div className="mt-2">
-                <button 
+                <button
                   onClick={() => setExpanded(!expanded)}
                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
                 >
                   {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                   Arguments
                 </button>
-                {expanded && (
-                  <pre className="text-[11px] font-mono bg-muted/50 p-2 rounded border border-border/50 overflow-x-auto" 
-                       dangerouslySetInnerHTML={{ __html: formatJson(step.args) }} />
-                )}
+                {expanded && <JsonView args={step.args} />}
               </div>
             )}
           </div>

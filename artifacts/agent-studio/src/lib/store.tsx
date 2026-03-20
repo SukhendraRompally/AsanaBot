@@ -38,6 +38,7 @@ const createNewSession = (): Session => ({
 const defaultSettings: Settings = {
   vmBackendUrl: '',
   vmBearerToken: '',
+  vmHealthPath: '/health',
 };
 
 const initialState: AppState = {
@@ -133,7 +134,7 @@ function appReducer(state: AppState, action: Action): AppState {
             if (targetIdx !== -1) {
               updatedMessages[targetIdx] = {
                 ...updatedMessages[targetIdx],
-                toolCalls: [...(updatedMessages[targetIdx].toolCalls || []), { tool: action.trace.tool!, args: action.trace.args }]
+                toolCalls: [...(updatedMessages[targetIdx].toolCalls || []), { tool: action.trace.tool!, args: action.trace.args ?? {} }]
               };
             }
           } else if (action.trace.type === 'final_answer' && action.trace.content) {
