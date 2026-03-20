@@ -1,15 +1,14 @@
 import { useRef, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { BrainCircuit, Zap, CheckCircle2, Star, AlertTriangle, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { BrainCircuit, Zap, CheckCircle2, Star, AlertTriangle, X, ChevronDown, ChevronRight, ShieldAlert } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { TraceStep } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 
-/** Tokenize a JSON string into typed segments for safe colorized rendering */
+/** Safe syntax-highlighted JSON rendered as React text nodes — no dangerouslySetInnerHTML */
 type JsonToken = { kind: 'key' | 'string' | 'number' | 'boolean' | 'null' | 'punct'; value: string };
 
-function tokenizeJson(obj: Record<string, unknown>): JsonToken[] {
-  const raw = JSON.stringify(obj, null, 2);
+function tokenizeJson(raw: string): JsonToken[] {
   const tokens: JsonToken[] = [];
   let i = 0;
   while (i < raw.length) {
@@ -49,10 +48,16 @@ const TOKEN_COLORS: Record<JsonToken['kind'], string> = {
   punct: 'text-muted-foreground',
 };
 
-function JsonView({ args }: { args: Record<string, unknown> }) {
-  const tokens = tokenizeJson(args);
+function JsonTextView({ raw }: { raw: string }) {
+  let formatted: string;
+  try {
+    formatted = JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    formatted = raw;
+  }
+  const tokens = tokenizeJson(formatted);
   return (
-    <pre className="text-[11px] font-mono bg-muted/50 p-2 rounded border border-border/50 overflow-x-auto whitespace-pre-wrap break-all">
+    <pre className="text-[11px] font-mono bg-muted/50 p-2 rounded border border-border/50 overflow-x-auto whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
       {tokens.map((tok, idx) => (
         <span key={idx} className={TOKEN_COLORS[tok.kind]}>{tok.value}</span>
       ))}
@@ -63,49 +68,76 @@ function JsonView({ args }: { args: Record<string, unknown> }) {
 function TraceCard({ step }: { step: TraceStep }) {
   const [expanded, setExpanded] = useState(true);
 
-  let icon, color, bg, border, title;
+  let icon: React.ReactNode;
+  let color: string;
+  let bg: string;
+  let border: string;
+  let title: string;
 
   switch (step.type) {
     case 'thought':
       icon = <BrainCircuit className="w-4 h-4" />;
-      color = 'text-[#06b6d4]'; // cyan
+      color = 'text-[#06b6d4]';
       bg = 'bg-[#06b6d4]/10';
       border = 'border-l-[#06b6d4]';
       title = 'Thought';
       break;
     case 'action':
       icon = <Zap className="w-4 h-4" />;
-      color = 'text-[#f59e0b]'; // amber
-      bg = 'bg-[#f59e0b]/10';
-      border = 'border-l-[#f59e0b]';
+      color = step.is_destructive ? 'text-red-400' : 'text-[#f59e0b]';
+      bg = step.is_destructive ? 'bg-red-400/10' : 'bg-[#f59e0b]/10';
+      border = step.is_destructive ? 'border-l-red-400' : 'border-l-[#f59e0b]';
       title = 'Action';
       break;
     case 'observation':
       icon = <CheckCircle2 className="w-4 h-4" />;
-      color = 'text-[#10b981]'; // green
+      color = 'text-[#10b981]';
       bg = 'bg-[#10b981]/10';
       border = 'border-l-[#10b981]';
       title = 'Observation';
       break;
-    case 'final_answer':
-      icon = <Star className="w-4 h-4" />;
-      color = 'text-primary';
-      bg = 'bg-primary/10';
-      border = 'border-l-primary';
-      title = 'Final Answer';
+    case 'result': {
+      const s = step.status;
+      if (s === 'SUCCESS') {
+        icon = <Star className="w-4 h-4" />;
+        color = 'text-primary';
+        bg = 'bg-primary/10';
+        border = 'border-l-primary';
+        title = 'Result · Success';
+      } else if (s === 'CANCELLED') {
+        icon = <X className="w-4 h-4" />;
+        color = 'text-muted-foreground';
+        bg = 'bg-muted/30';
+        border = 'border-l-muted-foreground';
+        title = 'Result · Cancelled';
+      } else {
+        icon = <AlertTriangle className="w-4 h-4" />;
+        color = 'text-destructive';
+        bg = 'bg-destructive/10';
+        border = 'border-l-destructive';
+        title = 'Result · Error';
+      }
+      break;
+    }
+    case 'confirmation_required':
+      icon = <ShieldAlert className="w-4 h-4" />;
+      color = 'text-destructive';
+      bg = 'bg-destructive/10';
+      border = 'border-l-destructive';
+      title = 'Confirmation Required';
       break;
     case 'error':
-    case 'requires_confirmation':
+    default:
       icon = <AlertTriangle className="w-4 h-4" />;
       color = 'text-destructive';
       bg = 'bg-destructive/10';
       border = 'border-l-destructive';
-      title = step.type === 'error' ? 'Error' : 'Requires Confirmation';
+      title = 'Error';
       break;
   }
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       className={`border border-border border-l-4 ${border} bg-card rounded-lg p-3 shadow-sm`}
@@ -113,8 +145,13 @@ function TraceCard({ step }: { step: TraceStep }) {
       <div className="flex items-center gap-2 mb-2">
         <div className={`p-1 rounded-md ${bg} ${color}`}>{icon}</div>
         <span className={`text-xs font-semibold uppercase tracking-wider ${color}`}>{title}</span>
+        {step.type === 'action' && step.is_destructive && (
+          <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">
+            destructive
+          </span>
+        )}
         <span className="ml-auto text-[10px] text-muted-foreground font-mono">
-          {new Date(step.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit', fractionalSecondDigits: 3 })}
+          {new Date(step.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
         </span>
       </div>
 
@@ -122,49 +159,42 @@ function TraceCard({ step }: { step: TraceStep }) {
         {step.type === 'thought' && (
           <p className="text-sm italic text-muted-foreground leading-relaxed">{step.content}</p>
         )}
-        
+
         {step.type === 'action' && (
+          <div className="font-mono text-xs px-2 py-1 bg-muted rounded inline-block text-foreground border border-border/50">
+            {step.tool}
+          </div>
+        )}
+
+        {step.type === 'observation' && step.content && (
+          <div>
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
+            >
+              {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              Raw response
+            </button>
+            {expanded && <JsonTextView raw={step.content} />}
+          </div>
+        )}
+
+        {step.type === 'result' && (
+          <p className="text-sm text-foreground leading-relaxed">{step.content}</p>
+        )}
+
+        {step.type === 'confirmation_required' && (
           <div className="space-y-2">
-            <div className="font-mono text-xs px-2 py-1 bg-muted rounded inline-block text-foreground border border-border/50">
+            <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-destructive/20 text-destructive text-xs font-mono font-bold">
+              <ShieldAlert className="w-3 h-3" />
               {step.tool}
             </div>
-            {step.args && (
-              <div className="mt-2">
-                <button
-                  onClick={() => setExpanded(!expanded)}
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
-                >
-                  {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                  Arguments
-                </button>
-                {expanded && <JsonView args={step.args} />}
-              </div>
-            )}
-          </div>
-        )}
-
-        {step.type === 'observation' && (
-          <div className="text-sm text-foreground/90 bg-muted/30 p-2 rounded font-mono text-[11px] overflow-x-auto border border-border/50 max-h-32 overflow-y-auto">
-            {step.content}
-          </div>
-        )}
-
-        {step.type === 'final_answer' && (
-          <p className="text-sm text-foreground leading-relaxed font-medium">{step.content}</p>
-        )}
-
-        {step.type === 'requires_confirmation' && (
-          <div className="text-sm space-y-1">
-            <div className="font-mono text-xs px-2 py-1 bg-destructive/20 text-destructive rounded inline-block mb-1">
-              {step.action_type}
-            </div>
-            <p className="font-medium text-foreground">{step.resource}</p>
-            <p className="text-muted-foreground text-xs">{step.consequence}</p>
+            <p className="text-sm text-foreground/90 leading-relaxed">{step.message}</p>
           </div>
         )}
 
         {step.type === 'error' && (
-          <p className="text-sm text-destructive">{step.message}</p>
+          <p className="text-sm text-destructive">{step.message ?? step.content}</p>
         )}
       </div>
     </motion.div>
@@ -186,11 +216,11 @@ export function TracePanel() {
   const traces = activeSession?.traces || [];
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ width: 0, opacity: 0 }}
       animate={{ width: 400, opacity: 1 }}
       exit={{ width: 0, opacity: 0 }}
-      transition={{ type: "spring", bounce: 0, duration: 0.3 }}
+      transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
       className="h-full border-l border-border bg-sidebar/50 backdrop-blur-sm flex flex-col shrink-0 overflow-hidden"
     >
       <div className="h-14 px-4 flex items-center justify-between border-b border-border bg-card/50 shrink-0">
@@ -198,9 +228,9 @@ export function TracePanel() {
           <BrainCircuit className="w-4 h-4 text-primary" />
           Thought Trace
         </h2>
-        <Button 
-          variant="ghost" 
-          size="icon" 
+        <Button
+          variant="ghost"
+          size="icon"
           className="h-8 w-8 text-muted-foreground hover:text-foreground"
           onClick={() => dispatch({ type: 'TOGGLE_TRACE' })}
         >
@@ -208,7 +238,7 @@ export function TracePanel() {
         </Button>
       </div>
 
-      <div 
+      <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto p-4 space-y-4 scroll-smooth"
       >
@@ -226,7 +256,7 @@ export function TracePanel() {
         )}
 
         {state.isStreaming && !state.pendingConfirmation && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }}
             className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground font-mono uppercase tracking-widest"
           >

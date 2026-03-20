@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Session, Message, TraceStep, Settings, ConfirmationRequest, ConnectionStatus } from './types';
+import { Session, Message, TraceStep, Settings, ConfirmationRequest, ConnectionStatus, Tool } from './types';
 
 interface AppState {
   sessions: Session[];
@@ -11,6 +11,8 @@ interface AppState {
   settings: Settings;
   connectionStatus: ConnectionStatus;
   pendingConfirmation: ConfirmationRequest | null;
+  vmSessionId: string | null;
+  tools: Tool[];
 }
 
 type Action =
@@ -25,7 +27,9 @@ type Action =
   | { type: 'TOGGLE_SETTINGS'; show?: boolean }
   | { type: 'UPDATE_SETTINGS'; settings: Partial<Settings> }
   | { type: 'SET_CONNECTION_STATUS'; status: ConnectionStatus }
-  | { type: 'SET_CONFIRMATION'; request: ConfirmationRequest | null };
+  | { type: 'SET_CONFIRMATION'; request: ConfirmationRequest | null }
+  | { type: 'SET_VM_SESSION_ID'; sessionId: string | null }
+  | { type: 'SET_TOOLS'; tools: Tool[] };
 
 const createNewSession = (): Session => ({
   id: uuidv4(),
@@ -35,8 +39,10 @@ const createNewSession = (): Session => ({
   timestamp: Date.now(),
 });
 
+const DEFAULT_VM_URL = 'http://20.98.68.88:8001';
+
 const defaultSettings: Settings = {
-  vmBackendUrl: '',
+  vmBackendUrl: DEFAULT_VM_URL,
   vmBearerToken: '',
   vmHealthPath: '/health',
 };
@@ -50,9 +56,10 @@ const initialState: AppState = {
   settings: defaultSettings,
   connectionStatus: 'unknown',
   pendingConfirmation: null,
+  vmSessionId: null,
+  tools: [],
 };
 
-// Fix initial active session ID
 initialState.activeSessionId = initialState.sessions[0].id;
 
 const AppContext = createContext<{
@@ -71,51 +78,37 @@ function appReducer(state: AppState, action: Action): AppState {
         ...state,
         sessions: [newSession, ...state.sessions],
         activeSessionId: newSession.id,
+        vmSessionId: null,
       };
     }
     case 'SWITCH_SESSION':
-      return { ...state, activeSessionId: action.id };
+      return { ...state, activeSessionId: action.id, vmSessionId: null };
     case 'ADD_MESSAGE': {
       return {
         ...state,
         sessions: state.sessions.map((s) => {
           if (s.id !== state.activeSessionId) return s;
-          
-          // Auto-generate title from first user message if it's currently "New Conversation"
           let title = s.title;
           if (s.messages.length === 0 && action.message.role === 'user') {
             title = action.message.content.slice(0, 40) + (action.message.content.length > 40 ? '...' : '');
           }
-
-          // If the message has tool calls, and the last message was an agent message,
-          // we might want to append the tool call to it instead of creating a new message.
-          // For simplicity, we just add it to the messages array.
-          
-          return {
-            ...s,
-            title,
-            messages: [...s.messages, action.message],
-            timestamp: Date.now(),
-          };
+          return { ...s, title, messages: [...s.messages, action.message], timestamp: Date.now() };
         }),
       };
     }
     case 'ENSURE_AGENT_MESSAGE': {
-      // Creates a new empty agent message for the current turn if one doesn't already exist
-      // for THIS turn (identified by being after the last user message).
       return {
         ...state,
         sessions: state.sessions.map((s) => {
           if (s.id !== state.activeSessionId) return s;
           const lastUserIdx = [...s.messages].reverse().findIndex(m => m.role === 'user');
-          // Count messages after the last user message
           const messagesAfterUser = lastUserIdx === -1 ? s.messages.length : lastUserIdx;
-          const agentMsgExistsForThisTurn = messagesAfterUser > 0 && 
+          const agentMsgExistsForThisTurn = messagesAfterUser > 0 &&
             s.messages.slice(s.messages.length - messagesAfterUser).some(m => m.role === 'agent');
           if (agentMsgExistsForThisTurn) return s;
           return {
             ...s,
-            messages: [...s.messages, { id: action.agentMsgId, role: 'agent' as const, content: '', timestamp: Date.now() }]
+            messages: [...s.messages, { id: action.agentMsgId, role: 'agent' as const, content: '', timestamp: Date.now() }],
           };
         }),
       };
@@ -129,30 +122,27 @@ function appReducer(state: AppState, action: Action): AppState {
           let updatedMessages = [...s.messages];
 
           if (action.trace.type === 'action' && action.trace.tool) {
-            // Attach tool badge to the current turn's agent message (identified by action.agentMsgId)
             const targetIdx = updatedMessages.findIndex(m => m.id === action.agentMsgId);
             if (targetIdx !== -1) {
               updatedMessages[targetIdx] = {
                 ...updatedMessages[targetIdx],
-                toolCalls: [...(updatedMessages[targetIdx].toolCalls || []), { tool: action.trace.tool!, args: action.trace.args ?? {} }]
+                toolCalls: [
+                  ...(updatedMessages[targetIdx].toolCalls || []),
+                  { tool: action.trace.tool, is_destructive: action.trace.is_destructive ?? false },
+                ],
               };
             }
-          } else if (action.trace.type === 'final_answer' && action.trace.content) {
-            // Set final answer text on the current turn's agent message
+          } else if (action.trace.type === 'result' && action.trace.content) {
             const targetIdx = updatedMessages.findIndex(m => m.id === action.agentMsgId);
             if (targetIdx !== -1) {
               updatedMessages[targetIdx] = {
                 ...updatedMessages[targetIdx],
-                content: action.trace.content
+                content: action.trace.content,
               };
             }
           }
 
-          return {
-            ...s,
-            traces: [...s.traces, action.trace],
-            messages: updatedMessages
-          };
+          return { ...s, traces: [...s.traces, action.trace], messages: updatedMessages };
         }),
       };
     }
@@ -168,6 +158,10 @@ function appReducer(state: AppState, action: Action): AppState {
       return { ...state, connectionStatus: action.status };
     case 'SET_CONFIRMATION':
       return { ...state, pendingConfirmation: action.request };
+    case 'SET_VM_SESSION_ID':
+      return { ...state, vmSessionId: action.sessionId };
+    case 'SET_TOOLS':
+      return { ...state, tools: action.tools };
     default:
       return state;
   }
@@ -176,19 +170,24 @@ function appReducer(state: AppState, action: Action): AppState {
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
 
-  // Load from local storage on mount
   useEffect(() => {
     try {
       const savedData = localStorage.getItem('agentStudioState');
       if (savedData) {
         const parsed = JSON.parse(savedData);
-        dispatch({ 
-          type: 'INIT_STATE', 
+        const storedSettings = parsed.settings ?? {};
+        dispatch({
+          type: 'INIT_STATE',
           state: {
             sessions: parsed.sessions?.length ? parsed.sessions : initialState.sessions,
             activeSessionId: parsed.activeSessionId || initialState.activeSessionId,
-            settings: parsed.settings || initialState.settings,
-          } 
+            settings: {
+              ...defaultSettings,
+              ...storedSettings,
+              // Migrate: if the stored URL is blank, fall back to the new default
+              vmBackendUrl: storedSettings.vmBackendUrl || defaultSettings.vmBackendUrl,
+            },
+          },
         });
       }
     } catch (e) {
@@ -196,7 +195,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Save to local storage on change
   useEffect(() => {
     localStorage.setItem('agentStudioState', JSON.stringify({
       sessions: state.sessions,

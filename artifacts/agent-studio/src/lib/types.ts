@@ -1,16 +1,16 @@
 export type Role = 'user' | 'agent';
 
-export type TraceType = 
-  | 'thought' 
-  | 'action' 
-  | 'observation' 
-  | 'final_answer' 
-  | 'error' 
-  | 'requires_confirmation';
+export type TraceType =
+  | 'thought'
+  | 'action'
+  | 'observation'
+  | 'result'
+  | 'error'
+  | 'confirmation_required';
 
 export interface ToolCall {
   tool: string;
-  args: Record<string, unknown>;
+  is_destructive: boolean;
 }
 
 export interface Message {
@@ -24,15 +24,13 @@ export interface Message {
 export interface TraceStep {
   id: string;
   type: TraceType;
+  timestamp: number;
   content?: string;
   tool?: string;
-  args?: Record<string, unknown>;
-  action_type?: string;
-  resource?: string;
-  workspace?: string;
-  consequence?: string;
+  is_destructive?: boolean;
+  status?: 'SUCCESS' | 'ERROR' | 'CANCELLED';
+  session_id?: string;
   message?: string;
-  timestamp: number;
 }
 
 export interface Session {
@@ -49,20 +47,25 @@ export interface Settings {
   vmHealthPath: string;
 }
 
-/** Typed union of all streamed agent event shapes */
+export interface Tool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  is_destructive: boolean;
+}
+
+/** Typed union of all streamed agent event shapes from the VM backend */
 export type AgentEvent =
   | { type: 'thought'; content: string }
-  | { type: 'action'; tool: string; args: Record<string, unknown> }
+  | { type: 'action'; content: { tool: string; is_destructive: boolean } }
   | { type: 'observation'; content: string }
-  | { type: 'final_answer'; content: string }
-  | { type: 'requires_confirmation'; action_type: string; resource: string; workspace: string; consequence: string }
-  | { type: 'error'; message: string };
+  | { type: 'confirmation_required'; content: { message: string; session_id: string; tool: string } }
+  | { type: 'result'; content: { status: 'SUCCESS' | 'ERROR' | 'CANCELLED'; message: string } };
 
 export interface ConfirmationRequest {
-  action_type: string;
-  resource: string;
-  workspace: string;
-  consequence: string;
+  message: string;
+  session_id: string;
+  tool: string;
 }
 
 export type ConnectionStatus = 'unknown' | 'checking' | 'connected' | 'disconnected';
