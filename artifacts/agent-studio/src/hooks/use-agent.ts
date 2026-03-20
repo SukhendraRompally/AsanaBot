@@ -70,7 +70,11 @@ function parseStreamLine(line: string): AgentEvent | null {
         : 'ERROR';
       return {
         type: 'result',
-        content: { status: validStatus, message: String(c.message ?? '') },
+        content: {
+          status: validStatus,
+          message: String(c.message ?? ''),
+          session_id: c.session_id ? String(c.session_id) : undefined,
+        },
       };
     }
 
@@ -134,10 +138,13 @@ export function useAgent() {
         break;
 
       case 'result': {
-        const { status, message } = event.content;
+        const { status, message, session_id } = event.content;
         dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
         dispatch({ type: 'ADD_TRACE', trace: { ...base, type: 'result', status, content: message }, agentMsgId });
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
+        if (session_id) {
+          dispatch({ type: 'SET_VM_SESSION_ID', sessionId: session_id });
+        }
         if (status === 'ERROR') {
           toast({ title: 'Agent Error', description: message, variant: 'destructive' });
         }

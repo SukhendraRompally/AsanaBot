@@ -60,7 +60,7 @@ export type AgentEvent =
   | { type: 'action'; content: { tool: string; is_destructive: boolean } }
   | { type: 'observation'; content: string }
   | { type: 'confirmation_required'; content: { message: string; session_id: string; tool: string } }
-  | { type: 'result'; content: { status: 'SUCCESS' | 'ERROR' | 'CANCELLED'; message: string } };
+  | { type: 'result'; content: { status: 'SUCCESS' | 'ERROR' | 'CANCELLED'; message: string; session_id?: string } };
 
 export interface ConfirmationRequest {
   message: string;
