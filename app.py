@@ -67,9 +67,10 @@ REQUIRED_ENV_VARS: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Session State — Human-in-the-Loop Gate
+# Session State — Human-in-the-Loop Gate + Conversation Memory
 # ---------------------------------------------------------------------------
-SESSION_TTL_SECONDS: int = 600  # Sessions expire after 10 minutes
+SESSION_TTL_SECONDS: int = 600        # Pending confirmation expires after 10 min
+CONVERSATION_TTL_SECONDS: int = 7200  # Conversation memory expires after 2 hours
 
 
 @dataclasses.dataclass
@@ -86,23 +87,51 @@ class SessionState:
     created_at: datetime           # UTC timestamp for TTL expiry
 
 
-# Module-level session store. Single source of truth for pending confirmations.
-_session_store: dict[str, SessionState] = {}
+@dataclasses.dataclass
+class ConversationState:
+    """
+    Persistent conversation history for a session.
+    Stores only clean user/assistant summary pairs — NOT the raw ReAct traces
+    (tool calls, observations) from within a single turn. This keeps the
+    context window lean and prevents prior JSON tool calls from confusing the LLM.
+
+    Format of each entry in `history`:
+        {"role": "user",      "content": "<what the user said>"}
+        {"role": "assistant", "content": "<the final answer given>"}
+    """
+    session_id: str
+    history: list[dict]            # Mutable list — engine appends to it in-place
+    last_active: datetime          # Updated on every turn for TTL tracking
+
+
+# Module-level stores — the only global mutable state in this module.
+# For horizontal scaling, replace both with Redis + aioredis.
+_session_store: dict[str, SessionState] = {}          # pending confirmations
+_conversation_store: dict[str, ConversationState] = {}  # per-session memory
 
 
 def _prune_expired_sessions() -> None:
     """
-    Remove sessions older than SESSION_TTL_SECONDS.
+    Remove stale entries from both stores.
     Called at the start of every POST /chat request to prevent memory leaks.
     """
     now = datetime.now(timezone.utc)
-    expired = [
+
+    expired_sessions = [
         sid for sid, state in _session_store.items()
         if (now - state.created_at).total_seconds() > SESSION_TTL_SECONDS
     ]
-    for sid in expired:
-        logger.info("Pruning expired session %s (tool: %s)", sid, _session_store[sid].pending_tool)
+    for sid in expired_sessions:
+        logger.info("Pruning expired confirmation session %s (tool: %s)", sid, _session_store[sid].pending_tool)
         del _session_store[sid]
+
+    expired_convos = [
+        sid for sid, state in _conversation_store.items()
+        if (now - state.last_active).total_seconds() > CONVERSATION_TTL_SECONDS
+    ]
+    for sid in expired_convos:
+        logger.info("Pruning expired conversation %s (%d turns)", sid, len(_conversation_store[sid].history) // 2)
+        del _conversation_store[sid]
 
 
 # ---------------------------------------------------------------------------
@@ -273,44 +302,60 @@ async def _build_stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
     """
     Core generator that drives the engine and serializes events to NDJSON bytes.
 
+    Conversation memory:
+      Every result event now includes `session_id`. The client must send this
+      back in all subsequent messages so the backend can load the conversation
+      history and the engine can maintain context across turns.
+
+    Request modes:
+      Fresh turn:   {message: "...", session_id: "<id from prior result>"}
+      First turn:   {message: "..."} — server assigns a new session_id
+      Confirm:      {confirmation: true,  session_id: "<id>"}
+      Cancel:       {confirmation: false, session_id: "<id>", message: ""}
+
     Guarantees:
       - Always yields at least one event (even on error)
-      - Never raises — all exceptions are caught and yielded as error result events
-      - session_id is injected into confirmation_required events before streaming
+      - Never raises — all exceptions produce an error result event
+      - session_id is injected into every result and confirmation_required event
     """
     def _emit(event: dict) -> bytes:
         """Serialize a single event to a UTF-8 NDJSON line."""
         return (json.dumps(event, default=str) + "\n").encode("utf-8")
 
+    def _inject_session(event: dict, sid: str) -> dict:
+        """Add session_id to a result or confirmation_required event's content."""
+        if event["type"] in ("result", "confirmation_required"):
+            event["content"]["session_id"] = sid
+        return event
+
     try:
-        # ── Prune stale sessions on every request ────────────────────────
+        # ── Prune stale stores on every request ──────────────────────────
         _prune_expired_sessions()
 
-        # ── Determine operating mode ──────────────────────────────────────
         engine_config: EngineConfig = config_from_env()
 
-        # ── Mode: Cancellation ────────────────────────────────────────────
-        if request.session_id and not request.confirmation:
+        # ── Mode: Explicit cancel (empty message + session_id + confirmation=False)
+        if request.session_id and not request.confirmation and not request.message.strip():
             session = _session_store.pop(request.session_id, None)
             if session:
                 logger.info("Session %s cancelled by user.", request.session_id)
-                yield _emit({
+                yield _emit(_inject_session({
                     "type": "result",
                     "content": {
                         "status": "CANCELLED",
                         "message": f"Action '{session.pending_tool}' was cancelled.",
                         "data": None,
                     },
-                })
+                }, request.session_id))
             else:
-                yield _emit({
+                yield _emit(_inject_session({
                     "type": "result",
                     "content": {
                         "status": "ERROR",
-                        "message": "Session not found or already expired.",
+                        "message": "No pending action found for this session.",
                         "data": None,
                     },
-                })
+                }, request.session_id))
             return
 
         # ── Mode: Confirmation ────────────────────────────────────────────
@@ -322,13 +367,14 @@ async def _build_stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
                         "status": "ERROR",
                         "message": "session_id is required when confirmation=true.",
                         "data": None,
+                        "session_id": None,
                     },
                 })
                 return
 
             session = _session_store.pop(request.session_id, None)
             if not session:
-                yield _emit({
+                yield _emit(_inject_session({
                     "type": "result",
                     "content": {
                         "status": "ERROR",
@@ -338,27 +384,34 @@ async def _build_stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
                         ),
                         "data": None,
                     },
-                })
+                }, request.session_id))
                 return
 
             logger.info(
                 "Executing confirmed action '%s' for session %s",
                 session.pending_tool, request.session_id
             )
-            pending_action = {
-                "tool": session.pending_tool,
-                "args": session.pending_args,
-            }
+
+            # Load conversation history so the confirmed action is recorded in memory
+            convo = _conversation_store.get(request.session_id)
+            history = convo.history if convo else []
+
+            pending_action = {"tool": session.pending_tool, "args": session.pending_args}
             async for event in run_react_loop(
                 user_message=session.original_message,
                 config=engine_config,
+                conversation_history=history,
                 pending_action=pending_action,
                 confirmed=True,
             ):
-                yield _emit(event)
+                yield _emit(_inject_session(event, request.session_id))
+
+            # Update last_active so the conversation doesn't expire prematurely
+            if request.session_id in _conversation_store:
+                _conversation_store[request.session_id].last_active = datetime.now(timezone.utc)
             return
 
-        # ── Mode: Fresh request ───────────────────────────────────────────
+        # ── Mode: Regular message (fresh turn or follow-up) ───────────────
         if not request.message.strip():
             yield _emit({
                 "type": "result",
@@ -366,25 +419,42 @@ async def _build_stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
                     "status": "ERROR",
                     "message": "message cannot be empty.",
                     "data": None,
+                    "session_id": request.session_id,
                 },
             })
             return
 
-        # Generate a session_id now so it's ready if a confirmation_required
-        # event is produced mid-stream
+        # Reuse the client's session_id if provided (continuing a conversation),
+        # or mint a new one for a brand-new conversation.
         current_session_id = request.session_id or str(uuid.uuid4())
-        logger.info("New chat request (session %s): %s", current_session_id, request.message[:100])
+
+        # Load or create the conversation state for this session
+        if current_session_id not in _conversation_store:
+            _conversation_store[current_session_id] = ConversationState(
+                session_id=current_session_id,
+                history=[],
+                last_active=datetime.now(timezone.utc),
+            )
+        convo_state = _conversation_store[current_session_id]
+        # history is a mutable list — engine appends to it in-place after each turn
+        history = convo_state.history
+
+        turn_count = len(history) // 2  # each turn = 1 user + 1 assistant entry
+        logger.info(
+            "Chat turn %d (session %s): %s",
+            turn_count + 1, current_session_id, request.message[:100]
+        )
 
         async for event in run_react_loop(
             user_message=request.message,
             config=engine_config,
+            conversation_history=history,
         ):
-            # ── Intercept confirmation_required: freeze into session ──────
+            # ── Intercept confirmation_required: freeze into session store ─
             if event["type"] == "confirmation_required":
                 tool_name = event["content"]["tool"]
                 tool_args = event["content"]["args"]
 
-                # Store the pending action in the session store
                 _session_store[current_session_id] = SessionState(
                     session_id=current_session_id,
                     pending_tool=tool_name,
@@ -397,10 +467,11 @@ async def _build_stream(request: ChatRequest) -> AsyncGenerator[bytes, None]:
                     tool_name, current_session_id
                 )
 
-                # Inject session_id into the event so the client can send it back
-                event["content"]["session_id"] = current_session_id
+            # Inject session_id into result and confirmation events
+            yield _emit(_inject_session(event, current_session_id))
 
-            yield _emit(event)
+        # Update last_active after the turn completes
+        convo_state.last_active = datetime.now(timezone.utc)
 
     except Exception as exc:
         # Safety net: guarantee the stream always closes with a readable error

@@ -365,14 +365,15 @@ def build_confirmation_message(tool_name: str, args: dict) -> str:
 async def run_react_loop(
     user_message: str,
     config: EngineConfig,
+    conversation_history: list[dict] | None = None,
     pending_action: dict | None = None,
     confirmed: bool = False,
 ) -> AsyncGenerator[dict, None]:
     """
     The core ReAct (Reason + Act) loop.
 
-    Two modes:
-    ──────────
+    Three modes:
+    ────────────
     1. Fresh request (pending_action=None, confirmed=False):
        Runs the full ReAct loop — calls the LLM, parses tool calls,
        executes read-only tools, pauses on destructive tools.
@@ -380,6 +381,14 @@ async def run_react_loop(
     2. Confirmation resume (pending_action=<dict>, confirmed=True):
        Skips the LLM entirely. Executes the frozen pending action directly
        and yields a result event. This prevents LLM non-determinism on retry.
+
+    Multi-turn memory:
+    ──────────────────
+    conversation_history is a mutable list of {"role", "content"} dicts
+    representing prior user/assistant exchanges (NOT the internal ReAct tool
+    calls — just the summarised user message and final answer from each turn).
+    The engine appends the current turn's exchange to this list in-place so
+    app.py can persist it for the next request without any extra return value.
 
     Yields:
     ───────
@@ -405,11 +414,12 @@ async def run_react_loop(
         try:
             result = await spec["function"](**tool_args)
             yield _observation_event(result)
-            yield _result_event(
-                "SUCCESS",
-                f"Done! {tool_name} executed successfully.",
-                result,
-            )
+            summary = f"Done! {tool_name} executed successfully."
+            # Record the confirmed action in history so the next turn knows it happened
+            if conversation_history is not None:
+                conversation_history.append({"role": "user", "content": user_message})
+                conversation_history.append({"role": "assistant", "content": summary})
+            yield _result_event("SUCCESS", summary, result)
         except AsanaAPIError as e:
             yield _observation_event({"error": str(e), "status_code": e.status_code})
             yield _result_event("ERROR", f"Asana API error: {e}")
@@ -427,8 +437,13 @@ async def run_react_loop(
         api_version=config.azure_api_version,
     )
 
+    # Build conversation: system prompt + prior turns (summarised) + current message.
+    # We do NOT inject the raw ReAct traces from prior turns — only the clean
+    # user/assistant summaries. This keeps the context window lean and avoids
+    # confusing the LLM with prior tool call JSON.
     conversation: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
+        *(conversation_history or []),
         {"role": "user", "content": user_message},
     ]
 
@@ -494,6 +509,11 @@ async def run_react_loop(
 
         # ── Final answer ──────────────────────────────────────────────────
         if parsed["kind"] == "final_answer":
+            # Persist this turn as a clean user/assistant exchange for future turns.
+            # Stored in conversation_history (mutated in-place) — app.py saves it.
+            if conversation_history is not None:
+                conversation_history.append({"role": "user", "content": user_message})
+                conversation_history.append({"role": "assistant", "content": parsed["answer"]})
             yield _result_event("SUCCESS", parsed["answer"])
             return
 
