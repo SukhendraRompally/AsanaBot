@@ -3,7 +3,6 @@ import { Sidebar } from '@/components/Sidebar';
 import { ChatPanel } from '@/components/ChatPanel';
 import { TracePanel } from '@/components/TracePanel';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
-import { SettingsDrawer } from '@/components/SettingsDrawer';
 
 export default function AgentConsole() {
   return (
@@ -15,7 +14,6 @@ export default function AgentConsole() {
         <TracePanel />
       </div>
       <ConfirmationModal />
-      <SettingsDrawer />
     </div>
   );
 }

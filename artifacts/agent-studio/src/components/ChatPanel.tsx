@@ -28,7 +28,7 @@ export function ChatPanel() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
     }
@@ -139,7 +139,7 @@ export function ChatPanel() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={state.isStreaming ? "Agent is working..." : "Ask the agent... (Cmd+Enter to send)"}
+            placeholder={state.isStreaming ? "Agent is working..." : "Ask your AsanaBot..."}
             disabled={state.isStreaming || !activeSession}
             className="min-h-[60px] max-h-40 resize-none pr-14 py-4 bg-input/50 focus-visible:bg-input border-border focus-visible:ring-primary/50 rounded-xl shadow-sm transition-all duration-200"
             rows={1}
