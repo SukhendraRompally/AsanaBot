@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Save, Activity } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
+import { vmProxyUrl } from '@/lib/vm-fetch';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -26,19 +27,18 @@ export function SettingsDrawer() {
     dispatch({ type: 'TOGGLE_SETTINGS', show: false });
   };
 
-  const buildHealthUrl = (baseUrl: string, path: string) => {
-    const trimmedBase = baseUrl.replace(/\/$/, '');
-    const trimmedPath = path.startsWith('/') ? path : `/${path}`;
-    return `${trimmedBase}${trimmedPath}`;
-  };
+  const proxyHealthUrl = (path: string) => vmProxyUrl(path.startsWith('/') ? path : `/${path}`);
 
   const handleTest = async () => {
     if (!url) return;
     setTesting(true);
     dispatch({ type: 'SET_CONNECTION_STATUS', status: 'checking' });
     try {
-      const res = await fetch(buildHealthUrl(url, healthPath), {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await fetch(proxyHealthUrl(healthPath), {
+        headers: {
+          'X-VM-Url': url,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       });
       dispatch({ type: 'SET_CONNECTION_STATUS', status: res.ok ? 'connected' : 'disconnected' });
     } catch {
@@ -53,8 +53,11 @@ export function SettingsDrawer() {
 
     const check = async () => {
       try {
-        const res = await fetch(buildHealthUrl(state.settings.vmBackendUrl, state.settings.vmHealthPath), {
-          headers: state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {}
+        const res = await fetch(proxyHealthUrl(state.settings.vmHealthPath), {
+          headers: {
+            'X-VM-Url': state.settings.vmBackendUrl,
+            ...(state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {}),
+          },
         });
         dispatch({ type: 'SET_CONNECTION_STATUS', status: res.ok ? 'connected' : 'disconnected' });
       } catch {
@@ -65,6 +68,7 @@ export function SettingsDrawer() {
     check();
     const int = setInterval(check, 30000);
     return () => clearInterval(int);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.settings.vmBackendUrl, state.settings.vmBearerToken, state.settings.vmHealthPath, dispatch]);
 
   return (

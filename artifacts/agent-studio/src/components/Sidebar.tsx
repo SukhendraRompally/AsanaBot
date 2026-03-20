@@ -3,6 +3,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { MessageSquare, Plus, PanelLeftClose, PanelLeftOpen, Wrench, ShieldAlert, ChevronDown, ChevronRight } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { Tool } from '@/lib/types';
+import { vmProxyUrl, vmHeaders } from '@/lib/vm-fetch';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -67,8 +68,8 @@ export function Sidebar() {
 
     const fetchTools = async () => {
       try {
-        const res = await fetch(`${state.settings.vmBackendUrl}/tools`, {
-          headers: state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {},
+        const res = await fetch(vmProxyUrl('/tools'), {
+          headers: vmHeaders(state.settings),
         });
         if (!res.ok) return;
         const data: unknown = await res.json();

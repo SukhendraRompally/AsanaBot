@@ -2,11 +2,12 @@ import { useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useAppStore } from '@/lib/store';
 import { AgentEvent, TraceStep } from '@/lib/types';
+import { vmFetch, vmProxyUrl, vmHeaders } from '@/lib/vm-fetch';
 import { useToast } from '@/hooks/use-toast';
 
 /**
  * Parse a raw NDJSON stream line into a typed AgentEvent.
- * Returns null for blank lines, [DONE] sentinels, or unparseable/unrecognised payloads.
+ * Returns null for blank lines, [DONE] sentinels, or unknown payloads.
  */
 function parseStreamLine(line: string): AgentEvent | null {
   const trimmed = line.trim();
@@ -145,7 +146,7 @@ export function useAgent() {
     }
   }, [dispatch, toast]);
 
-  /** Drain an NDJSON / SSE response body, calling processEvent for each typed event. */
+  /** Drain an NDJSON response body, dispatching typed events for each line. */
   const drainStream = useCallback(async (body: ReadableStream<Uint8Array>) => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -172,14 +173,12 @@ export function useAgent() {
     if (!query.trim() || state.isStreaming || !activeSession) return;
 
     agentMsgIdRef.current = uuidv4();
-
     dispatch({ type: 'ADD_MESSAGE', message: { id: uuidv4(), role: 'user', content: query, timestamp: Date.now() } });
     dispatch({ type: 'SET_STREAMING', isStreaming: true });
 
-    // ── DEMO MODE ─────────────────────────────────────────────────────────────
+    // ── DEMO MODE ────────────────────────────────────────────────────────────
     if (!state.settings.vmBackendUrl) {
       const fire = (ev: AgentEvent, ms: number) => setTimeout(() => processEvent(ev), ms);
-
       fire({ type: 'thought', content: 'I need to find the Marketing project GID first, then create the task.' }, 500);
       fire({ type: 'action', content: { tool: 'search_projects', is_destructive: false } }, 1500);
       fire({ type: 'observation', content: 'Found project: Marketing (GID: 1234567890)' }, 3000);
@@ -187,17 +186,11 @@ export function useAgent() {
       fire({ type: 'action', content: { tool: 'create_task', is_destructive: false } }, 5000);
 
       if (query.toLowerCase().includes('delete')) {
-        const demoSessionId = 'demo-session-' + uuidv4();
-        setTimeout(() => {
-          processEvent({
-            type: 'confirmation_required',
-            content: {
-              message: 'I\'m about to permanently delete the task "Design Review" from the Marketing project. This action cannot be undone. Do you want to proceed?',
-              session_id: demoSessionId,
-              tool: 'delete_task',
-            },
-          });
-        }, 6000);
+        const demoSid = 'demo-session-' + uuidv4();
+        setTimeout(() => processEvent({
+          type: 'confirmation_required',
+          content: { message: 'I\'m about to permanently delete the task "Design Review" from the Marketing project. This cannot be undone. Proceed?', session_id: demoSid, tool: 'delete_task' },
+        }), 6000);
         return;
       }
 
@@ -208,19 +201,16 @@ export function useAgent() {
       return;
     }
 
-    // ── REAL BACKEND ──────────────────────────────────────────────────────────
+    // ── REAL BACKEND (via proxy) ──────────────────────────────────────────────
     try {
       abortControllerRef.current = new AbortController();
 
       const payload: Record<string, unknown> = { message: query };
       if (state.vmSessionId) payload.session_id = state.vmSessionId;
 
-      const res = await fetch(`${state.settings.vmBackendUrl}/chat`, {
+      const res = await fetch(vmProxyUrl('/chat'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {}),
-        },
+        headers: vmHeaders(state.settings),
         body: JSON.stringify(payload),
         signal: abortControllerRef.current.signal,
       });
@@ -246,33 +236,28 @@ export function useAgent() {
     const sessionId = state.pendingConfirmation?.session_id ?? state.vmSessionId;
     dispatch({ type: 'SET_CONFIRMATION', request: null });
 
-    // ── DEMO MODE ─────────────────────────────────────────────────────────────
+    // ── DEMO MODE ────────────────────────────────────────────────────────────
     if (!state.settings.vmBackendUrl) {
       if (confirmed) {
         dispatch({ type: 'SET_STREAMING', isStreaming: true });
         setTimeout(() => processEvent({ type: 'observation', content: 'Task deleted successfully.' }), 1000);
-        setTimeout(() => {
-          processEvent({ type: 'result', content: { status: 'SUCCESS', message: 'The task has been permanently deleted.' } });
-        }, 2000);
+        setTimeout(() => processEvent({ type: 'result', content: { status: 'SUCCESS', message: 'The task has been permanently deleted.' } }), 2000);
       } else {
         processEvent({ type: 'result', content: { status: 'CANCELLED', message: 'Action cancelled by user.' } });
       }
       return;
     }
 
-    // ── REAL BACKEND ──────────────────────────────────────────────────────────
+    // ── REAL BACKEND (via proxy) ──────────────────────────────────────────────
     try {
       dispatch({ type: 'SET_STREAMING', isStreaming: true });
 
       const payload: Record<string, unknown> = { message: '', confirmation: confirmed };
       if (sessionId) payload.session_id = sessionId;
 
-      const res = await fetch(`${state.settings.vmBackendUrl}/chat`, {
+      const res = await fetch(vmProxyUrl('/chat'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(state.settings.vmBearerToken ? { Authorization: `Bearer ${state.settings.vmBearerToken}` } : {}),
-        },
+        headers: vmHeaders(state.settings),
         body: JSON.stringify(payload),
       });
 
