@@ -167,7 +167,13 @@ export function useAgent() {
           console.log('[agent] session_id captured from result:', session_id);
           dispatch({ type: 'SET_VM_SESSION_ID', sessionId: session_id });
         }
+        // Ensure the agent chat bubble exists, then explicitly set its content.
+        // UPDATE_AGENT_MESSAGE is a dedicated action — cleaner than relying on
+        // ADD_TRACE to update the message as a side-effect (which can silently fail).
         dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
+        if (message) {
+          dispatch({ type: 'UPDATE_AGENT_MESSAGE', agentMsgId, content: message });
+        }
         dispatch({ type: 'ADD_TRACE', trace: { ...base, type: 'result', status, content: message }, agentMsgId });
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
         if (status === 'ERROR') {

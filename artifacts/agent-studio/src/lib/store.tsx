@@ -21,6 +21,7 @@ type Action =
   | { type: 'SWITCH_SESSION'; id: string }
   | { type: 'ADD_MESSAGE'; message: Message }
   | { type: 'ENSURE_AGENT_MESSAGE'; agentMsgId: string }
+  | { type: 'UPDATE_AGENT_MESSAGE'; agentMsgId: string; content: string }
   | { type: 'ADD_TRACE'; trace: TraceStep; agentMsgId: string }
   | { type: 'SET_STREAMING'; isStreaming: boolean }
   | { type: 'TOGGLE_TRACE' }
@@ -109,6 +110,20 @@ function appReducer(state: AppState, action: Action): AppState {
           return {
             ...s,
             messages: [...s.messages, { id: action.agentMsgId, role: 'agent' as const, content: '', timestamp: Date.now() }],
+          };
+        }),
+      };
+    }
+    case 'UPDATE_AGENT_MESSAGE': {
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== state.activeSessionId) return s;
+          return {
+            ...s,
+            messages: s.messages.map((m) =>
+              m.id === action.agentMsgId ? { ...m, content: action.content } : m
+            ),
           };
         }),
       };
