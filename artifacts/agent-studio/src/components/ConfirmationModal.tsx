@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AlertOctagon, CheckCircle, XCircle } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
@@ -9,9 +10,10 @@ export function ConfirmationModal() {
   const { confirmAction } = useAgent();
   const req = state.pendingConfirmation;
 
-  // Handle keyboard shortcuts when modal is open
-  if (req) {
-    window.onkeydown = (e) => {
+  // Handle keyboard shortcuts when modal is open using useEffect
+  useEffect(() => {
+    if (!req) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         confirmAction(false);
@@ -20,9 +22,9 @@ export function ConfirmationModal() {
         confirmAction(true);
       }
     };
-  } else {
-    window.onkeydown = null;
-  }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [req, confirmAction]);
 
   return (
     <AnimatePresence>

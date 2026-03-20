@@ -36,7 +36,9 @@ export function Header() {
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-secondary/50 border border-border/50 text-xs text-muted-foreground mr-2 cursor-help">
               <span className={`w-2 h-2 rounded-full ${statusColor}`} />
               {state.settings.vmBackendUrl ? (
-                <span className="max-w-[120px] truncate">{new URL(state.settings.vmBackendUrl).hostname}</span>
+                <span className="max-w-[120px] truncate">
+                  {(() => { try { return new URL(state.settings.vmBackendUrl).hostname; } catch { return state.settings.vmBackendUrl.slice(0, 20); } })()}
+                </span>
               ) : (
                 <span>Demo Mode</span>
               )}

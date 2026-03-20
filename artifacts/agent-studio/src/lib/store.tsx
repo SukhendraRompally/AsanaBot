@@ -18,7 +18,8 @@ type Action =
   | { type: 'NEW_SESSION' }
   | { type: 'SWITCH_SESSION'; id: string }
   | { type: 'ADD_MESSAGE'; message: Message }
-  | { type: 'ADD_TRACE'; trace: TraceStep }
+  | { type: 'ENSURE_AGENT_MESSAGE'; agentMsgId: string }
+  | { type: 'ADD_TRACE'; trace: TraceStep; agentMsgId: string }
   | { type: 'SET_STREAMING'; isStreaming: boolean }
   | { type: 'TOGGLE_TRACE' }
   | { type: 'TOGGLE_SETTINGS'; show?: boolean }
@@ -98,48 +99,52 @@ function appReducer(state: AppState, action: Action): AppState {
         }),
       };
     }
+    case 'ENSURE_AGENT_MESSAGE': {
+      // Creates a new empty agent message for the current turn if one doesn't already exist
+      // for THIS turn (identified by being after the last user message).
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== state.activeSessionId) return s;
+          const lastUserIdx = [...s.messages].reverse().findIndex(m => m.role === 'user');
+          // Count messages after the last user message
+          const messagesAfterUser = lastUserIdx === -1 ? s.messages.length : lastUserIdx;
+          const agentMsgExistsForThisTurn = messagesAfterUser > 0 && 
+            s.messages.slice(s.messages.length - messagesAfterUser).some(m => m.role === 'agent');
+          if (agentMsgExistsForThisTurn) return s;
+          return {
+            ...s,
+            messages: [...s.messages, { id: action.agentMsgId, role: 'agent' as const, content: '', timestamp: Date.now() }]
+          };
+        }),
+      };
+    }
     case 'ADD_TRACE': {
       return {
         ...state,
         sessions: state.sessions.map((s) => {
           if (s.id !== state.activeSessionId) return s;
-          
-          // Update the last agent message with tool badges if this is an action
+
           let updatedMessages = [...s.messages];
+
           if (action.trace.type === 'action' && action.trace.tool) {
-             const lastMsgIndex = updatedMessages.findLastIndex(m => m.role === 'agent');
-             if (lastMsgIndex !== -1) {
-                const lastMsg = updatedMessages[lastMsgIndex];
-                updatedMessages[lastMsgIndex] = {
-                   ...lastMsg,
-                   toolCalls: [...(lastMsg.toolCalls || []), { tool: action.trace.tool, args: action.trace.args }]
-                };
-             } else {
-                // If no agent message exists yet for this turn, create an empty one to hold badges
-                updatedMessages.push({
-                   id: uuidv4(),
-                   role: 'agent',
-                   content: '',
-                   timestamp: Date.now(),
-                   toolCalls: [{ tool: action.trace.tool, args: action.trace.args }]
-                });
-             }
+            // Attach tool badge to the current turn's agent message (identified by action.agentMsgId)
+            const targetIdx = updatedMessages.findIndex(m => m.id === action.agentMsgId);
+            if (targetIdx !== -1) {
+              updatedMessages[targetIdx] = {
+                ...updatedMessages[targetIdx],
+                toolCalls: [...(updatedMessages[targetIdx].toolCalls || []), { tool: action.trace.tool!, args: action.trace.args }]
+              };
+            }
           } else if (action.trace.type === 'final_answer' && action.trace.content) {
-             // Append final answer content to the last agent message
-             const lastMsgIndex = updatedMessages.findLastIndex(m => m.role === 'agent');
-             if (lastMsgIndex !== -1) {
-                updatedMessages[lastMsgIndex] = {
-                   ...updatedMessages[lastMsgIndex],
-                   content: action.trace.content
-                };
-             } else {
-                updatedMessages.push({
-                   id: uuidv4(),
-                   role: 'agent',
-                   content: action.trace.content,
-                   timestamp: Date.now()
-                });
-             }
+            // Set final answer text on the current turn's agent message
+            const targetIdx = updatedMessages.findIndex(m => m.id === action.agentMsgId);
+            if (targetIdx !== -1) {
+              updatedMessages[targetIdx] = {
+                ...updatedMessages[targetIdx],
+                content: action.trace.content
+              };
+            }
           }
 
           return {

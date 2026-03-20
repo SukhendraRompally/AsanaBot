@@ -8,9 +8,13 @@ export function useAgent() {
   const { state, dispatch, activeSession } = useAppStore();
   const { toast } = useToast();
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Stable per-turn agent message ID — set when a new query starts, cleared after turn ends
+  const agentMsgIdRef = useRef<string>(uuidv4());
 
   const processEvent = useCallback((event: any) => {
     if (!event || !event.type) return;
+
+    const agentMsgId = agentMsgIdRef.current;
 
     const baseTrace: Omit<TraceStep, 'type'> = {
       id: uuidv4(),
@@ -19,16 +23,19 @@ export function useAgent() {
 
     switch (event.type) {
       case 'thought':
-        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'thought', content: event.content } });
+        dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
+        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'thought', content: event.content }, agentMsgId });
         break;
       case 'action':
-        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'action', tool: event.tool, args: event.args } });
+        dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
+        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'action', tool: event.tool, args: event.args }, agentMsgId });
         break;
       case 'observation':
-        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'observation', content: event.content } });
+        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'observation', content: event.content }, agentMsgId });
         break;
       case 'final_answer':
-        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'final_answer', content: event.content } });
+        dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
+        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'final_answer', content: event.content }, agentMsgId });
         break;
       case 'requires_confirmation':
         dispatch({ 
@@ -40,7 +47,8 @@ export function useAgent() {
             resource: event.resource,
             workspace: event.workspace,
             consequence: event.consequence
-          } 
+          },
+          agentMsgId
         });
         dispatch({
           type: 'SET_CONFIRMATION',
@@ -55,7 +63,7 @@ export function useAgent() {
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
         break;
       case 'error':
-        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'error', message: event.message } });
+        dispatch({ type: 'ADD_TRACE', trace: { ...baseTrace, type: 'error', message: event.message }, agentMsgId });
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
         toast({ title: 'Error', description: event.message, variant: 'destructive' });
         break;
@@ -64,6 +72,9 @@ export function useAgent() {
 
   const sendQuery = useCallback(async (query: string) => {
     if (!query.trim() || state.isStreaming || !activeSession) return;
+
+    // Assign a fresh agent message ID for this turn — all trace events in this turn target it
+    agentMsgIdRef.current = uuidv4();
 
     // Add user message
     dispatch({
