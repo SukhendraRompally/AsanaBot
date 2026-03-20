@@ -1,4 +1,4 @@
-import { Zap, PanelRight } from 'lucide-react';
+import { Zap, PanelRight, Github } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 
@@ -17,7 +17,19 @@ export function Header() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
+        <a
+          href="https://github.com/SukhendraRompally/AsanaBot"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
+        >
+          <Github className="w-4 h-4 shrink-0" />
+          <span>Read the full documentation on Github</span>
+        </a>
+
+        <div className="w-px h-4 bg-border hidden sm:block" />
+
         <Button
           variant={state.showTrace ? 'secondary' : 'ghost'}
           size="sm"
