@@ -61,7 +61,7 @@ function JsonView({ args }: { args: Record<string, unknown> }) {
 }
 
 function TraceCard({ step }: { step: TraceStep }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
   let icon, color, bg, border, title;
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Send, User, Bot, Wrench } from 'lucide-react';
+import { Send, User, Bot, Wrench, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/lib/store';
 import { useAgent } from '@/hooks/use-agent';
@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 
 export function ChatPanel() {
-  const { state, activeSession } = useAppStore();
+  const { state, dispatch, activeSession } = useAppStore();
   const { sendQuery } = useAgent();
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -36,9 +36,29 @@ export function ChatPanel() {
 
   const messages = activeSession?.messages || [];
 
+  const newestSessionId = state.sessions.reduce(
+    (max, s) => (s.timestamp > (state.sessions.find(x => x.id === max)?.timestamp ?? 0) ? s.id : max),
+    state.sessions[0]?.id ?? ''
+  );
+  const isHistorical = activeSession && activeSession.id !== newestSessionId && messages.length > 0;
+
   return (
     <div className="flex-1 flex flex-col h-full bg-background relative min-w-0">
-      <div 
+      {isHistorical && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-400 text-xs shrink-0">
+          <History className="w-3.5 h-3.5 shrink-0" />
+          <span>You are viewing a historical session. Start a new session to continue chatting.</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-6 px-2 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/20"
+            onClick={() => dispatch({ type: 'NEW_SESSION' })}
+          >
+            New Session
+          </Button>
+        </div>
+      )}
+      <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 md:px-8 space-y-8 scroll-smooth"
       >
