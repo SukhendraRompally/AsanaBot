@@ -43,7 +43,7 @@ export function ConfirmationModal() {
                 <ShieldAlert className="w-8 h-8" />
               </div>
               <h2 className="text-xl font-bold text-foreground tracking-tight">Action Requires Confirmation</h2>
-              <p className="text-sm text-muted-foreground mt-1">The agent is about to perform a destructive operation.</p>
+              <p className="text-sm text-muted-foreground mt-1">The agent requires your approval to proceed.</p>
             </div>
 
             <div className="p-6 space-y-5">

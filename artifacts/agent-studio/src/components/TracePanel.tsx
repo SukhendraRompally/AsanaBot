@@ -147,7 +147,7 @@ function TraceCard({ step }: { step: TraceStep }) {
         <span className={`text-xs font-semibold uppercase tracking-wider ${color}`}>{title}</span>
         {step.type === 'action' && step.is_destructive && (
           <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">
-            destructive
+            Approval Required
           </span>
         )}
         <span className="ml-auto text-[10px] text-muted-foreground font-mono">

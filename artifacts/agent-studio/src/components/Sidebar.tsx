@@ -42,7 +42,7 @@ function ToolPalette({ tools, collapsed }: { tools: Tool[]; collapsed: boolean }
                     {tool.is_destructive && (
                       <span className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider text-red-400 bg-red-500/15 px-1 py-0.5 rounded border border-red-500/20 shrink-0">
                         <ShieldAlert className="w-2.5 h-2.5" />
-                        destructive
+                        Approval Required
                       </span>
                     )}
                   </div>
