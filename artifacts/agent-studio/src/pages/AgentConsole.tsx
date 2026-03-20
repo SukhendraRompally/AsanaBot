@@ -3,17 +3,20 @@ import { Sidebar } from '@/components/Sidebar';
 import { ChatPanel } from '@/components/ChatPanel';
 import { TracePanel } from '@/components/TracePanel';
 import { ConfirmationModal } from '@/components/ConfirmationModal';
+import { AgentProvider } from '@/lib/agent-context';
 
 export default function AgentConsole() {
   return (
-    <div className="h-screen w-full flex flex-col overflow-hidden bg-background text-foreground dark">
-      <Header />
-      <div className="flex-1 flex overflow-hidden relative">
-        <Sidebar />
-        <ChatPanel />
-        <TracePanel />
+    <AgentProvider>
+      <div className="h-screen w-full flex flex-col overflow-hidden bg-background text-foreground dark">
+        <Header />
+        <div className="flex-1 flex overflow-hidden relative">
+          <Sidebar />
+          <ChatPanel />
+          <TracePanel />
+        </div>
+        <ConfirmationModal />
       </div>
-      <ConfirmationModal />
-    </div>
+    </AgentProvider>
   );
 }

@@ -3,14 +3,14 @@ import ReactMarkdown from 'react-markdown';
 import { Send, User, Bot, Wrench, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/lib/store';
-import { useAgent } from '@/hooks/use-agent';
+import { useAgentContext } from '@/lib/agent-context';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 
 export function ChatPanel() {
   const { state, dispatch, activeSession } = useAppStore();
-  const { sendQuery } = useAgent();
+  const { sendQuery } = useAgentContext();
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 

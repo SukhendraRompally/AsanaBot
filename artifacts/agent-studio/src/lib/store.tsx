@@ -22,6 +22,7 @@ type Action =
   | { type: 'ADD_MESSAGE'; message: Message }
   | { type: 'ENSURE_AGENT_MESSAGE'; agentMsgId: string }
   | { type: 'UPDATE_AGENT_MESSAGE'; agentMsgId: string; content: string }
+  | { type: 'SET_RESULT_MESSAGE'; agentMsgId: string; content: string }
   | { type: 'ADD_TRACE'; trace: TraceStep; agentMsgId: string }
   | { type: 'SET_STREAMING'; isStreaming: boolean }
   | { type: 'TOGGLE_TRACE' }
@@ -124,6 +125,30 @@ function appReducer(state: AppState, action: Action): AppState {
             messages: s.messages.map((m) =>
               m.id === action.agentMsgId ? { ...m, content: action.content } : m
             ),
+          };
+        }),
+      };
+    }
+    // Single atomic action: find-and-update the agent bubble, or create it with content
+    // already set — no two-step ENSURE+UPDATE sequencing needed.
+    case 'SET_RESULT_MESSAGE': {
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== state.activeSessionId) return s;
+          const existingIdx = s.messages.findIndex((m) => m.id === action.agentMsgId);
+          if (existingIdx !== -1) {
+            const msgs = [...s.messages];
+            msgs[existingIdx] = { ...msgs[existingIdx], content: action.content };
+            return { ...s, messages: msgs };
+          }
+          // No agent bubble yet — create one with content already populated
+          return {
+            ...s,
+            messages: [
+              ...s.messages,
+              { id: action.agentMsgId, role: 'agent' as const, content: action.content, timestamp: Date.now() },
+            ],
           };
         }),
       };

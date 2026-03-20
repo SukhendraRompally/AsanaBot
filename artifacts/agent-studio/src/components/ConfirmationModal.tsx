@@ -2,12 +2,12 @@ import { useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ShieldAlert, CheckCircle, XCircle } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
-import { useAgent } from '@/hooks/use-agent';
+import { useAgentContext } from '@/lib/agent-context';
 import { Button } from '@/components/ui/button';
 
 export function ConfirmationModal() {
   const { state } = useAppStore();
-  const { confirmAction } = useAgent();
+  const { confirmAction } = useAgentContext();
   const req = state.pendingConfirmation;
 
   useEffect(() => {

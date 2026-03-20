@@ -167,12 +167,13 @@ export function useAgent() {
           console.log('[agent] session_id captured from result:', session_id);
           dispatch({ type: 'SET_VM_SESSION_ID', sessionId: session_id });
         }
-        // Ensure the agent chat bubble exists, then explicitly set its content.
-        // UPDATE_AGENT_MESSAGE is a dedicated action — cleaner than relying on
-        // ADD_TRACE to update the message as a side-effect (which can silently fail).
-        dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
+        // Single atomic action: finds-or-creates the agent bubble and sets content.
+        // Avoids any two-dispatch sequencing issue in React's batched update queue.
         if (message) {
-          dispatch({ type: 'UPDATE_AGENT_MESSAGE', agentMsgId, content: message });
+          console.log('[agent] SET_RESULT_MESSAGE', { agentMsgId, message });
+          dispatch({ type: 'SET_RESULT_MESSAGE', agentMsgId, content: message });
+        } else {
+          dispatch({ type: 'ENSURE_AGENT_MESSAGE', agentMsgId });
         }
         dispatch({ type: 'ADD_TRACE', trace: { ...base, type: 'result', status, content: message }, agentMsgId });
         dispatch({ type: 'SET_STREAMING', isStreaming: false });
