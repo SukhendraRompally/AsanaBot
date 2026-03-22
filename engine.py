@@ -179,10 +179,42 @@ GID RESOLUTION RULES:
   not 100% certain it came from a successful Observation in this conversation.
 
 FINAL ANSWER RULES:
-- When your final answer mentions specific tasks, projects, or users, ALWAYS include their GID
-  in parentheses immediately after the name, e.g.: "Schedule kickoff meeting (GID: 1213741989707855)".
-- This is critical: GIDs in the final answer carry into the next turn's context, allowing you to
-  act on them without re-fetching. If you omit the GID, you will have to look it up again.
+- Write your final_answer in plain English with human-readable names only.
+  Do NOT include raw GIDs in the final_answer text — users should never see numeric GIDs.
+- Keep GIDs only in your "thought" field and in tool "args". Never put them in final_answer.
+- The system preserves your full reasoning trace internally, so GIDs remain available
+  for future turns even when they are absent from final_answer.
+
+DISAMBIGUATION RULES — apply to tasks, projects, AND users before acting on any of them:
+
+Tasks:
+- When the user refers to a task by name (full or partial), search with search_tasks().
+- If MORE THAN ONE task matches: do NOT proceed to any action. Output a final_answer listing
+  all matches (name + due date if available) and ask the user which one they mean. Example:
+    "I found 3 tasks matching 'kickoff':
+     1. Schedule kickoff meeting (due 2026-03-25)
+     2. Schedule kickoff meeting (due 2026-04-01)
+     3. Project kickoff prep (no due date)
+     Which one did you mean?"
+- If exactly ONE task matches but the user's query was partial or abbreviated: confirm the full
+  task name before proceeding. Example: "I found 'Schedule kickoff meeting with design team'. Is that the one?"
+
+Projects:
+- When the user refers to a project by name, call list_projects(workspace_gid) to look it up.
+- If MORE THAN ONE project matches the user's query: output a final_answer listing all matching
+  project names and ask the user to specify. Do not pick one arbitrarily.
+- If exactly ONE project matches but the user's query was partial: confirm the full project name
+  before proceeding with any action that uses that project.
+
+Users:
+- When the user refers to a person by name, call get_users(workspace_gid) to look them up.
+- If MORE THAN ONE user matches (e.g. two people named "Alex"): output a final_answer listing
+  the full names (and emails if available) of all matches and ask which one they mean.
+- If exactly ONE user matches but the query was partial: confirm the full name before proceeding.
+
+General rule:
+- Only proceed when you are 100% certain which specific entity the user means.
+  Certainty = exact match AND only one result, OR user explicitly confirmed after you listed options.
 
 DESTRUCTIVE ACTION RULES:
 - Tools marked [DESTRUCTIVE] modify or delete data in Asana.
@@ -299,31 +331,25 @@ def parse_llm_output(raw_text: str) -> dict:
 # Confirmation message builder
 # ---------------------------------------------------------------------------
 
-def build_confirmation_message(tool_name: str, args: dict) -> str:
+async def build_confirmation_message(tool_name: str, args: dict) -> str:
     """
     Produce a human-readable English summary of what a destructive action will do.
     The Replit frontend displays this in the confirmation dialog.
+
+    For task-level actions (complete/delete/update), fetches the task name from Asana
+    so the user sees "Mark 'Schedule kickoff meeting' as complete?" instead of a raw GID.
     """
-    templates: dict[str, str] = {
-        "create_task": (
-            "I'm about to create a new task named **\"{name}\"** "
-            "in workspace `{workspace_gid}`"
-            "{assignee_clause}{project_clause}{due_clause}. "
-            "Do you want to proceed?"
-        ),
-        "update_task": (
-            "I'm about to update task `{task_gid}` with the following changes: "
-            "{changes}. Do you want to proceed?"
-        ),
-        "complete_task": (
-            "I'm about to mark task `{task_gid}` as **complete**. "
-            "Do you want to proceed?"
-        ),
-        "delete_task": (
-            "I'm about to **permanently delete** task `{task_gid}`. "
-            "⚠️ This action CANNOT be undone. Do you want to proceed?"
-        ),
-    }
+    # Resolve task name for task-level actions so users see names, not GIDs
+    task_name: str | None = None
+    if tool_name in ("complete_task", "delete_task", "update_task"):
+        task_gid = args.get("task_gid")
+        if task_gid:
+            try:
+                from asana_tools import get_task
+                task_data = await get_task(task_gid)
+                task_name = task_data.get("name") or task_gid
+            except Exception:
+                task_name = task_gid  # fallback: show GID if lookup fails
 
     if tool_name == "create_task":
         assignee_clause = (
@@ -338,12 +364,10 @@ def build_confirmation_message(tool_name: str, args: dict) -> str:
             f", due {args['due_on']}"
             if args.get("due_on") else ""
         )
-        return templates["create_task"].format(
-            name=args.get("name", "Untitled"),
-            workspace_gid=args.get("workspace_gid", "?"),
-            assignee_clause=assignee_clause,
-            project_clause=project_clause,
-            due_clause=due_clause,
+        return (
+            f"I'm about to create a new task named **\"{args.get('name', 'Untitled')}\"** "
+            f"in your workspace{assignee_clause}{project_clause}{due_clause}. "
+            "Do you want to proceed?"
         )
 
     if tool_name == "update_task":
@@ -351,16 +375,25 @@ def build_confirmation_message(tool_name: str, args: dict) -> str:
         changes = ", ".join(
             f"{k}={v!r}" for k, v in args.items() if k not in skip
         ) or "no changes specified"
-        return templates["update_task"].format(
-            task_gid=args.get("task_gid", "?"),
-            changes=changes,
+        label = f"**\"{task_name}\"**" if task_name else "the task"
+        return (
+            f"I'm about to update {label} with the following changes: "
+            f"{changes}. Do you want to proceed?"
         )
 
     if tool_name == "complete_task":
-        return templates["complete_task"].format(task_gid=args.get("task_gid", "?"))
+        label = f"**\"{task_name}\"**" if task_name else "the task"
+        return (
+            f"I'm about to mark {label} as **complete**. "
+            "Do you want to proceed?"
+        )
 
     if tool_name == "delete_task":
-        return templates["delete_task"].format(task_gid=args.get("task_gid", "?"))
+        label = f"**\"{task_name}\"**" if task_name else "the task"
+        return (
+            f"I'm about to **permanently delete** {label}. "
+            "This action CANNOT be undone. Do you want to proceed?"
+        )
 
     # Fallback for any future destructive tools
     return (
@@ -426,12 +459,15 @@ async def run_react_loop(
             # Safety net: for task-level destructive actions, verify the task GID
             # exists before executing. This catches hallucinated GIDs that slipped
             # through the LLM's reasoning (the most common failure mode).
+            # We also capture the task name here for a descriptive success message.
+            verified_task_name: str | None = None
             if tool_name in ("complete_task", "delete_task", "update_task"):
                 task_gid = tool_args.get("task_gid")
                 if task_gid:
                     from asana_tools import get_task
                     try:
-                        await get_task(task_gid)
+                        task_data = await get_task(task_gid)
+                        verified_task_name = task_data.get("name")
                     except AsanaAPIError as verify_err:
                         if verify_err.status_code == 404:
                             yield _result_event(
@@ -445,7 +481,21 @@ async def run_react_loop(
 
             result = await spec["function"](**tool_args)
             yield _observation_event(result)
-            summary = f"Done! {tool_name} executed successfully."
+
+            # Build a human-readable success message using the task name when available
+            task_label = f'"{verified_task_name}"' if verified_task_name else "The task"
+            if tool_name == "complete_task":
+                summary = f"Task {task_label} has been marked as complete."
+            elif tool_name == "delete_task":
+                summary = f"Task {task_label} has been permanently deleted."
+            elif tool_name == "update_task":
+                summary = f"Task {task_label} has been updated successfully."
+            elif tool_name == "create_task":
+                created_name = (result or {}).get("name", tool_args.get("name", ""))
+                summary = f'Task "{created_name}" has been created.' if created_name else "Task created successfully."
+            else:
+                summary = f"Done! {tool_name} executed successfully."
+
             # Record the confirmed action in history so the next turn knows it happened
             if conversation_history is not None:
                 conversation_history.append({"role": "user", "content": user_message})
@@ -571,7 +621,7 @@ async def run_react_loop(
 
         # ── Destructive action: pause and request confirmation ─────────────
         if spec["is_destructive"]:
-            message = build_confirmation_message(tool_name, tool_args)
+            message = await build_confirmation_message(tool_name, tool_args)
             yield _confirmation_required_event(tool_name, tool_args, message)
             # Return here — app.py will store the pending action in the session.
             # The loop does NOT continue. Confirmation is handled via a new request.
