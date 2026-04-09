@@ -1,5 +1,5 @@
 #!/bin/bash
-# Asana Agent — Moveworks Reference Implementation
+# AsanaBot — Agentic Asana Assistant
 # Starts the FastAPI server on port 8001.
 # Port 8001 avoids conflict with other services on this VM (Typeface on 8000).
 

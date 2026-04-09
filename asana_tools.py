@@ -1,6 +1,6 @@
 """
 asana_tools.py — Asana v1.0 Connector Layer
-Moveworks Agent Studio: Asana Reference Implementation
+AsanaBot: Agentic Asana Assistant
 
 Responsibilities:
   - Authenticated httpx.AsyncClient (singleton) for all Asana API calls

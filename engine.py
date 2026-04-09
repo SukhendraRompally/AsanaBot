@@ -1,6 +1,6 @@
 """
 engine.py — ReAct Reasoning Engine
-Moveworks Agent Studio: Asana Reference Implementation
+AsanaBot: Agentic Asana Assistant
 
 Implements the ReAct (Reason + Act) loop:
   Thought → Action → Observation → Thought → ... → Final Answer
@@ -148,7 +148,7 @@ def _build_system_prompt() -> str:
     tool_block = "\n".join(tool_lines)
     today = date.today().isoformat()
 
-    return f"""You are an intelligent Asana assistant built by Moveworks. You help users manage \
+    return f"""You are AsanaBot, an intelligent AI assistant for Asana. You help users manage \
 tasks, projects, and workspaces by reasoning step-by-step and calling tools.
 
 TODAY'S DATE: {today}

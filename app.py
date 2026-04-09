@@ -1,6 +1,6 @@
 """
 app.py — FastAPI Server
-Moveworks Agent Studio: Asana Reference Implementation
+AsanaBot: Agentic Asana Assistant
 
 Responsibilities:
   - POST /chat    : Accept a user message, stream NDJSON events from the ReAct engine
@@ -209,7 +209,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Asana Agent — Moveworks Reference Implementation",
+    title="AsanaBot — Agentic Asana Assistant",
     description=(
         "A production-grade agentic backend for Asana. "
         "Combines a ReAct reasoning loop, an Asana v1.0 connector, "
