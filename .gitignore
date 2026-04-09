@@ -1,5 +1,22 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+# ── Python (backend) ─────────────────────────────────────────────────────────
+# Secrets — never commit
+.env
 
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# ── Node / TypeScript (frontend) ──────────────────────────────────────────────
 # compiled output
 dist
 tmp
@@ -19,8 +36,6 @@ node_modules
 *.launch
 .settings/
 *.sublime-workspace
-
-# IDE - VSCode
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
@@ -37,13 +52,15 @@ yarn-error.log
 testem.log
 /typings
 
-# System Files
+# Logs
+*.log
+
+# ── System ─────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-.cursor/rules/nx-rules.mdc
-.github/instructions/nx.instructions.md
-
-# Replit
+# ── Replit ────────────────────────────────────────────────────────────────────
 .cache/
 .local/
+.cursor/rules/nx-rules.mdc
+.github/instructions/nx.instructions.md
